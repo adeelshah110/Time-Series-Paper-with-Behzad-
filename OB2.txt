@@ -1,0 +1,380 @@
+# Research Observations — iTransformer + ADWIN Adaptive Forecasting
+
+**Project:** Manufacturing Cycle-Time Forecasting Under Concept Drift  
+**Experiment:** iTransformer vs. iTransformer + ADWIN  
+**Date:** 1 November 2026  
+**Status:** Implementation and initial evaluation completed
+
+---
+
+## 1. Objective of the Experiment
+
+The objective was to investigate whether concept drift detection combined with adaptive fine-tuning could improve the forecasting accuracy of an iTransformer-based model.
+
+The standard iTransformer was first trained on historical manufacturing observations and evaluated without model updates. Subsequently, the same trained model was combined with ADWIN (Adaptive Windowing), which monitors prediction errors and identifies statistically significant changes in their distribution.
+
+When ADWIN detected a change, the iTransformer was fine-tuned using recently observed data.
+
+The primary research question was:
+
+**Can ADWIN-triggered model adaptation reduce cycle-time forecasting errors during concept drift and subsequent recovery compared with a non-adaptive iTransformer?**
+
+## 2. Dataset and Experimental Configuration
+
+The same manufacturing dataset and chronological evaluation periods were used for both configurations.
+
+| Parameter | Value |
+|---|---|
+| Dataset | `Dataset/cycle_time_data.joblib` |
+| Total observations | 995 |
+| Original DataFrame dimensions | 995 × 18 |
+| Input features | 5 |
+| Sequence length | 10 |
+| Initial training observations | 400 |
+| Training sequences | 390 |
+| Testing observations | 595 |
+| Stable period | 400–599 |
+| Drift period | 600–799 |
+| Recovery period | 800–994 |
+| Computing device | CPU |
+| PyTorch version | 2.15.0+cpu |
+
+The input variables were Processing_Time, Energy_Consumption, Machine_Availability, Upstream_Lag, and Station_ID.
+
+The input features and target were standardized using statistics calculated exclusively from the initial training observations. The same scalers were applied to subsequent observations.
+
+The evaluation followed a chronological sequence rather than random train-test splitting.
+
+## 3. iTransformer Architecture
+
+A lightweight, iTransformer-inspired neural network was implemented using PyTorch.
+
+The model applies self-attention across variables after embedding their temporal histories.
+
+Architecture:
+
+- Input sequence length: 10
+- Number of input features: 5
+- Embedding dimension: 32
+- Attention heads: 4
+- Transformer encoder layers: 2
+- Feedforward dimension: 64
+- Dropout rate: 0.1
+- Output: One-step-ahead cycle-time prediction
+- Trainable parameters: 27,809
+
+The initial model was trained using Adam optimization, a learning rate of 0.001, mean squared error loss, 100 epochs, and a batch size of 32.
+
+The trained model was saved as `Results/iTransformer/itransformer_model.pth`.
+
+This is a simplified, iTransformer-inspired implementation rather than an exact reproduction of the original published architecture.
+
+## 4. Standard iTransformer Baseline Results
+
+The baseline iTransformer was evaluated without additional training or adaptation during testing.
+
+| Period | Samples | MAE | RMSE |
+|---|---:|---:|---:|
+| Stable | 200 | 26.743 | 32.507 |
+| Drift | 200 | 59.961 | 72.121 |
+| Recovery | 195 | 33.604 | 39.243 |
+| Overall | 595 | 40.158 | 51.071 |
+
+### Observations
+
+During the stable period, the model achieved an MAE of 26.743, indicating its initial forecasting performance.
+
+After concept drift was introduced at observation 600, MAE increased to 59.961. This represented an approximately 124% increase compared with the stable period.
+
+The sharp increase indicates that the baseline model was sensitive to the changed data distribution.
+
+During the recovery period, MAE decreased to 33.604. Although performance improved relative to the drift period, it remained worse than during the initial stable period.
+
+These findings demonstrate that the non-adaptive model experienced substantial forecasting degradation during the simulated distribution change.
+
+## 5. ADWIN Concept Drift Detection
+
+ADWIN was initialized with a delta parameter of 0.002.
+
+The detector received the absolute prediction error after each prediction and after the actual target became available.
+
+The model weights were initially kept fixed to investigate drift detection independently of adaptation.
+
+### Detection Results
+
+| Event | Actual boundary | Detected observation | Detection delay |
+|---|---:|---:|---:|
+| Initial concept drift | 600 | 623 | 23 |
+| Recovery-related change | 800 | 879 | 79 |
+
+A total of two changes were detected.
+
+### Observations
+
+The first detection occurred at observation 623, shortly after the simulated drift began at observation 600.
+
+The detection delay was 23 observations.
+
+The second detection occurred at observation 879, which was 79 observations after the recovery period began.
+
+The detections indicate that ADWIN identified changes in the prediction-error distribution without receiving the true drift boundaries.
+
+However, the second detection should be described as a recovery-associated change rather than definitive proof that ADWIN identified the underlying recovery mechanism.
+
+These results suggest that ADWIN is suitable for monitoring forecasting errors in this experimental setting.
+
+## 6. Adaptive iTransformer + ADWIN Configuration
+
+An adaptive version of iTransformer was initialized using exactly the same trained weights as the baseline model.
+
+The equality of the initial model parameters was verified programmatically.
+
+The following adaptive learning configuration was used:
+
+| Parameter | Value |
+|---|---|
+| Drift detector | ADWIN |
+| ADWIN delta | 0.002 |
+| Adaptive learning rate | 0.0001 |
+| Fine-tuning epochs | 10 |
+| Adaptation window | 100 observations |
+| Fine-tuning batch size | 16 |
+| Adaptation trigger | ADWIN detection |
+| Total adaptations | 2 |
+| Adaptation observations | 623 and 879 |
+| Adaptive experiment execution time | 5.18 seconds |
+
+The experiment followed a sequential prequential evaluation procedure:
+
+1. Predict the next cycle time.
+2. Observe the true cycle time.
+3. Calculate the absolute prediction error.
+4. Update ADWIN with the error.
+5. Fine-tune the model if a change is detected.
+6. Continue forecasting using the updated model.
+
+Each fine-tuning operation used up to 100 recently observed labeled examples, including the observation that triggered detection.
+
+No future target observations were used in the fine-tuning process.
+
+The model was updated twice, at observations 623 and 879.
+
+The measured execution time of 5.18 seconds applies to this adaptive experiment run and should not be interpreted as a hardware-independent benchmark.
+
+## 7. Baseline vs. Adaptive iTransformer Results
+
+| Period | Baseline MAE | Adaptive MAE | MAE improvement |
+|---|---:|---:|---:|
+| Stable | 26.743 | 26.743 | 0.00% |
+| Drift | 59.961 | 52.155 | 13.02% |
+| Recovery | 33.604 | 31.062 | 7.56% |
+| Overall | 40.158 | 36.700 | 8.61% |
+
+### RMSE Comparison
+
+| Period | Baseline RMSE | Adaptive RMSE | Approx. reduction |
+|---|---:|---:|---:|
+| Stable | 32.507 | 32.507 | 0.00% |
+| Drift | 72.121 | 61.676 | 14.48% |
+| Recovery | 39.243 | 36.777 | 6.28% |
+| Overall | 51.071 | 45.575 | 10.76% |
+
+### Main Findings
+
+**Finding 1: Stable-period performance remained unchanged.**
+
+Both configurations produced identical predictions during the stable period because no adaptation occurred before observation 623.
+
+This confirms that the models began evaluation from the same initial forecasting state.
+
+**Finding 2: Adaptive learning reduced drift-period forecasting error.**
+
+The adaptive model reduced MAE from 59.961 to 52.155, corresponding to a 13.02% improvement.
+
+RMSE decreased from 72.121 to 61.676, an approximately 14.48% reduction.
+
+This was the largest improvement among the three evaluation periods.
+
+**Finding 3: Adaptation also improved recovery-period performance.**
+
+Recovery-period MAE decreased from 33.604 to 31.062, representing a 7.56% improvement.
+
+The adaptive model therefore retained an overall forecasting advantage during the recovery phase.
+
+**Finding 4: Overall forecasting accuracy improved.**
+
+Across all 595 testing observations, MAE decreased from 40.158 to 36.700.
+
+This represents an 8.61% overall reduction in MAE.
+
+Overall RMSE decreased from 51.071 to 45.575, representing an approximately 10.76% reduction.
+
+The results indicate that drift-triggered fine-tuning improved forecasting accuracy in this particular experimental run.
+
+## 8. Observations from Actual vs. Predicted Figures
+
+Three separate prediction comparisons were generated for the stable, drift, and recovery periods.
+
+### Stable Period
+
+The baseline and adaptive prediction curves overlapped.
+
+This behavior was expected because ADWIN had not yet detected a change.
+
+Both models followed the general cycle-time range but did not reproduce every short-term fluctuation.
+
+### Drift Period
+
+After observation 600, actual cycle times frequently became substantially higher than the baseline predictions.
+
+The baseline model tended to underestimate the increased cycle times.
+
+Following the adaptation at observation 623, the adaptive prediction curve shifted upward and generally became closer to the observed values.
+
+However, the adaptive model continued to underestimate some high cycle-time peaks.
+
+The improved predictions are consistent with the measured reduction in MAE and RMSE.
+
+### Recovery Period
+
+After observation 800, the actual cycle-time distribution returned toward its earlier range.
+
+Both models showed lower errors compared with the drift period.
+
+The adaptive model generally retained a modest advantage, although the difference between the two prediction curves varied throughout recovery.
+
+A second adaptation occurred at observation 879.
+
+The figure alone does not isolate the effect of this second update from the continuing influence of the first update.
+
+## 9. Observations from the Rolling MAE Comparison
+
+A rolling mean absolute error was calculated using a 30-observation window.
+
+The graph compared the baseline and adaptive models throughout the entire testing period.
+
+### Stable Period: 400–599
+
+The two rolling MAE curves were identical.
+
+Errors generally fluctuated within a relatively moderate range, approximately 20–35.
+
+### Initial Drift: 600–623
+
+Both models experienced a sharp increase in rolling MAE after observation 600.
+
+ADWIN detected a change at observation 623.
+
+Because the prediction at observation 623 was made before fine-tuning, the effects of the update could only appear in subsequent predictions.
+
+### Post-Adaptation Drift: 624–799
+
+Following the first update, the adaptive model generally achieved lower rolling MAE than the baseline.
+
+The improvement was particularly visible across much of the drift period.
+
+Nevertheless, the adaptive model still experienced elevated forecasting errors, showing that the update reduced rather than eliminated the effects of drift.
+
+### Recovery Period: 800–994
+
+Both models experienced a substantial reduction in rolling MAE after the recovery boundary.
+
+The adaptive model retained a modest advantage across parts of this period.
+
+The second ADWIN detection occurred at observation 879.
+
+After this detection, the rolling errors of both models remained relatively close, with the adaptive model performing better over some intervals but not every observation.
+
+### Overall Interpretation
+
+The rolling MAE visualization supports the numerical finding that adaptive fine-tuning improved forecasting accuracy during drift.
+
+The graph also demonstrates that the improvements were not uniform across all observations.
+
+## 10. Current Research Contribution
+
+The experiment provides preliminary evidence that integrating error-based concept drift detection with transformer-based forecasting can improve manufacturing cycle-time prediction under changing operating conditions.
+
+The investigated approach combines:
+
+- Variable-oriented temporal representation using an iTransformer-inspired model.
+- Sequential forecasting evaluation.
+- Error-based concept drift monitoring with ADWIN.
+- Drift-triggered fine-tuning using recently observed examples.
+- Separate evaluation across stable, drift, and recovery periods.
+
+The strongest numerical finding is the 13.02% reduction in drift-period MAE compared with the fixed iTransformer baseline.
+
+However, the integration of ADWIN with a neural forecasting model should not automatically be described as a novel algorithm. The eventual research contribution will depend on demonstrating benefits over appropriate adaptive baselines and clearly identifying the methodological differences.
+
+## 11. Limitations and Methodological Considerations
+
+Several issues require further investigation before preparing the final paper.
+
+**Single experimental run:** The reported results currently come from one training and adaptation configuration. Repeated experiments with different random seeds are required to evaluate stability.
+
+**ADWIN versus ordinary fine-tuning:** The improvement may result from updating the model rather than specifically from ADWIN's change-detection mechanism. Periodic and alternative update strategies should therefore be evaluated.
+
+**Feature availability:** The input features must be checked to confirm that they are available at the time each forecast is issued. In particular, Processing_Time and Upstream_Lag require careful consideration.
+
+**Experimental drift:** The dataset contains deliberately defined drift and recovery periods. Performance on naturally occurring manufacturing drift has not yet been demonstrated.
+
+**Model architecture:** The implementation is iTransformer-inspired and should not be presented as an exact reproduction of the original architecture.
+
+**Hyperparameter sensitivity:** ADWIN delta, adaptation window, fine-tuning epochs, and learning rate may affect results.
+
+**Statistical validation:** The current percentage improvements are descriptive. Statistical significance has not yet been established.
+
+**Computational efficiency:** Adaptation time, number of updates, training overhead, and prediction latency should be measured under consistent conditions.
+
+**Error magnitude:** Although adaptation improved results, the drift-period MAE remained 52.155. There is still considerable room for improving accuracy.
+
+## 12. Planned Next Experiments
+
+The next planned experiment is periodic fine-tuning of iTransformer without ADWIN.
+
+Three configurations will be compared:
+
+1. Standard iTransformer without adaptation.
+2. iTransformer with ADWIN-triggered adaptation.
+3. iTransformer with periodic fine-tuning.
+
+The periodic model will initially use the same adaptation window, learning rate, fine-tuning epochs, and batch size as the ADWIN configuration.
+
+The experiment will investigate whether change-triggered updates provide a meaningful advantage over fixed-interval updates.
+
+Further planned analysis includes comparing all previously implemented forecasting models, performing repeated-seed experiments, testing different adaptation-window sizes, and evaluating computational overhead.
+
+## 13. Preliminary Conclusion
+
+The iTransformer + ADWIN experiment demonstrated improved forecasting accuracy compared with the fixed iTransformer baseline on the evaluated manufacturing dataset.
+
+The adaptive configuration reduced drift-period MAE by 13.02%, recovery-period MAE by 7.56%, and overall MAE by 8.61%.
+
+ADWIN detected changes at observations 623 and 879, corresponding to delays of 23 and 79 observations relative to the known drift and recovery boundaries.
+
+The visualizations showed that adaptive fine-tuning generally reduced forecasting errors after the initial drift detection, although sudden cycle-time peaks remained difficult to predict.
+
+These findings support further investigation of adaptive transformer-based forecasting for manufacturing environments.
+
+The next essential step is to determine whether ADWIN-triggered fine-tuning offers a measurable advantage over periodic fine-tuning and other adaptation strategies.
+
+**Research status:** Preliminary adaptive iTransformer experiment completed. Ablation study and broader model comparison pending.
+
+---
+
+**Files generated during the experiment:**
+
+- `Results/iTransformer/metrics.csv`
+- `Results/iTransformer/predictions.csv`
+- `Results/iTransformer/actual_vs_predicted.png`
+- `Results/iTransformer/error_analysis.png`
+- `Results/iTransformer_ADWIN/drift_detection.csv`
+- `Results/iTransformer_ADWIN/drift_detection.png`
+- `Results/iTransformer_ADWIN/adaptive_predictions.csv`
+- `Results/iTransformer_ADWIN/adaptive_model.pth`
+- `Results/iTransformer_ADWIN/model_comparison.csv`
+- `Results/iTransformer_ADWIN/baseline_vs_adaptive.png`
+- `Results/iTransformer_ADWIN/rolling_mae_comparison.png`
+
+**End of research observations — 1 November 2026.**

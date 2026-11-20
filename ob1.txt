@@ -1,0 +1,104 @@
+Observations
+
+
+MANUFACTURING CYCLE-TIME FORECASTING — RUNNING RESEARCH NOTES
+Updated: 2026-11-01
+
+PURPOSE
+Record experimental settings, observations, interpretation, limitations, and next steps. This is a running log, not yet a manuscript Results section.
+
+1. DATASET AND EVALUATION SETUP (CONFIRMED)
+- Source: Dataset/cycle_time_data.joblib (Python dictionary).
+- Dictionary keys: df, Xraw, yraw, features, train_end, stable, drift, recovery, window, drift_multiplier, recovery_multiplier.
+- DataFrame: 995 rows x 18 columns.
+- Input array Xraw: (995, 5); target yraw: (995,).
+- Features: Processing_Time, Energy_Consumption, Machine_Availability, Upstream_Lag, Station_ID.
+- Initial training observations: indices 0–399; train_end = 400.
+- Stable evaluation: indices 400–599 (200 observations).
+- Drift evaluation: indices 600–799 (200 observations).
+- Recovery evaluation: indices 800–994 (195 observations).
+- Lookback window: 10 observations; one-step-ahead target at index i uses feature rows i-10 through i-1.
+- Sliding-window training samples: 390, shape (390, 10, 5).
+- Test samples: 595, shape (595, 10, 5), target indices 400–994.
+- StandardScaler was fit on initial training observations only, then applied to the full sequence. This avoids scaler fitting on test observations.
+- NOTE: Check whether all baseline notebooks use the identical horizon, input availability, scaling, and update protocol before making strict cross-model claims.
+- NOTE: Confirm that all five lagged features would be available at prediction time; examine the relationship between Processing_Time and the target.
+- NOTE: The dataset includes phase and multiplier columns, so verify how drift and recovery were constructed and describe any synthetic interventions transparently.
+
+2. COMPLETED BASELINE IMPLEMENTATIONS (FROM PREVIOUS SESSION)
+- LSTM: completed.
+- LSTM + ADWIN: completed.
+- Rolling ARIMA: completed.
+- Simplified PatchTST: completed.
+- iTransformer-inspired model: implemented and evaluated in this session.
+- Previous models' full metrics should be copied from their saved results before preparing a definitive comparison table. One previously noted stable-period LSTM MAE was approximately 24.28; this value is not independently rechecked here.
+
+3. iTRANSFORMER MODEL (CONFIRMED)
+- Framework: PyTorch 2.15.0+cpu; CUDA unavailable.
+- Input: batch x 10 time steps x 5 features.
+- Inverted variable-token design: transpose to batch x 5 variables x 10 time steps.
+- Linear embedding: 10 -> 32 dimensions per variable.
+- Transformer encoder: 2 layers, 4 attention heads, feedforward dimension 64, GELU, dropout 0.1.
+- Forecasting head: flatten 5 x 32 -> linear 64 -> ReLU -> linear 1.
+- Total trainable parameters: 27,809.
+- Forward-pass validation: input (4, 10, 5), output (4,).
+- Classification: lightweight iTransformer-inspired architecture, not an exact reproduction of the published iTransformer.
+- Training code: Adam optimizer, learning rate 0.001, MSE loss, 100 epochs, batch size 32, seed 42, CPU.
+- Training duration and loss-curve values were not provided in the chat; do not invent them.
+- Model save path: Results/iTransformer/itransformer_model.pth.
+
+4. iTRANSFORMER EVALUATION (CONFIRMED)
+Period       Samples       MAE        RMSE
+Stable          200      26.7431     32.5068
+Drift           200      59.9613     72.1213
+Recovery        195      33.6044     39.2426
+Overall         595      40.1575     51.0714
+
+- Metrics path: Results/iTransformer/metrics.csv.
+- Predictions path: Results/iTransformer/predictions.csv.
+- Actual-versus-predicted plot path: Results/iTransformer/actual_vs_predicted.png (plot code supplied; plot itself not inspected here).
+- Error analysis plot path: Results/iTransformer/error_analysis.png (graph inspected in conversation).
+- Training loss plot path: Results/iTransformer/training_loss.png (plot code supplied; plot itself not inspected here).
+
+5. OBSERVATIONS FROM iTRANSFORMER RESULTS
+- Stable phase: MAE 26.74 and RMSE 32.51 establish a baseline before the imposed drift period.
+- Drift phase: MAE 59.96 and RMSE 72.12; MAE is approximately 124% higher than stable-phase MAE (59.9613 / 26.7431 - 1).
+- Recovery phase: MAE declines to 33.60 and RMSE to 39.24; recovery MAE remains approximately 26% higher than stable-phase MAE.
+- Overall evaluation: MAE 40.16, RMSE 51.07 across 595 held-out targets.
+- The period-specific error changes are consistent with strong sensitivity to the introduced drift regime. They do not alone establish the precise causal mechanism.
+- Do not claim model superiority or statistical significance without consistent baselines and additional analysis.
+
+6. OBSERVATIONS FROM ERROR-ANALYSIS GRAPH (VISUAL)
+- The chart shows absolute error per observation and a 30-observation rolling mean absolute error.
+- Red dashed line at index 600 marks drift onset; green dashed line at index 800 marks recovery onset.
+- During the stable phase, the rolling error generally lies around 20–35, with intermittent spikes.
+- Immediately after index 600, errors become larger and more volatile; individual absolute errors often exceed 100 and some approach or exceed 150.
+- During the drift phase, the rolling error rises to roughly 60–75 early in the phase and remains elevated with fluctuations.
+- After index 800, the rolling error declines toward roughly 30–40, though intermittent spikes remain.
+- Rolling averages straddle phase boundaries; the rolling curve should not be interpreted as an instantaneous response to a regime change.
+- The graph visually supports the numeric period-wise metrics and motivates testing adaptive updating.
+
+7. INTERPRETATION AND PAPER CONTRIBUTION (PROVISIONAL)
+- Comparing static and adaptive forecasting models under known stable, drift, and recovery periods may provide a useful empirical contribution.
+- The drift-period performance drop motivates a controlled test of drift-aware adaptation, but improvement has not yet been demonstrated for iTransformer + ADWIN.
+- Potential paper angles: robustness to drift, adaptation latency, recovery behavior, computational cost, and fair comparison of classical/recurrent/transformer methods.
+- A combination of existing components alone is not sufficient evidence of novelty. The paper needs rigorous evaluation, transparent methodology, and a clearly articulated contribution.
+
+8. NEXT EXPERIMENT: iTRANSFORMER + ADWIN (PLANNED)
+- New notebook: iTransformer_ADWIN.ipynb.
+- Planned detector: river.drift.ADWIN(delta=0.002).
+- Proposed online evaluation: predict each target before observing its true value; compute error only after observation; feed error stream to ADWIN; on detection, fine-tune using only information available at that time.
+- Log drift detection indices, adaptation triggers, update costs, and pre/post-adaptation errors.
+- Compare with static iTransformer using identical test indices and the same preprocessing and prediction horizon.
+- Prevent look-ahead leakage during adaptive training; document adaptation window, learning rate, number of epochs, and any replay buffer.
+- ADWIN installation/initialization output and adaptive results have NOT yet been supplied.
+- Research target: determine whether adaptive updates reduce drift MAE relative to the static iTransformer baseline of 59.9613; do not presume improvement.
+
+9. IMPORTANT QUALITY CHECKS BEFORE SUBMISSION
+- Confirm target definition, units, timestamp ordering, and whether Station_ID should be treated as categorical rather than continuous.
+- Confirm train-only normalization for every model and no target leakage.
+- Compare the same forecasting horizon and identical period boundaries.
+- Repeat stochastic neural models with multiple random seeds; report variability.
+- Consider a no-drift-control and an always-update-control to isolate ADWIN's contribution.
+- Report MAE/RMSE, training and inference times, number of adaptation events, and detector delay where applicable.
+- Preserve figures, predictions, metrics, and experiment configurations for reproducibility.
